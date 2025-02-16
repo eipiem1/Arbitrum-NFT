@@ -1,68 +1,75 @@
-//!
-//! Stylus Hello World
-//!
-//! The following contract implements the Counter example from Foundry.
-//!
-//! ```solidity
-//! contract Counter {
-//!     uint256 public number;
-//!     function setNumber(uint256 newNumber) public {
-//!         number = newNumber;
-//!     }
-//!     function increment() public {
-//!         number++;
-//!     }
-//! }
-//! ```
-//!
-//! The program is ABI-equivalent with Solidity, which means you can call it from both Solidity and Rust.
-//! To do this, run `cargo stylus export-abi`.
-//!
-//! Note: this code is a template-only and has not been audited.
-//!
-
-// Allow `cargo stylus export-abi` to generate a main function.
-#![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
+// Only run this as a WASM if the export-abi feature is not set.
+#![cfg_attr(not(any(feature = "export-abi", test)), no_main)]
 extern crate alloc;
 
-/// Import items from the SDK. The prelude contains common traits and macros.
-use stylus_sdk::{alloy_primitives::U256, prelude::*};
+/// Initializes a custom, global allocator for Rust programs compiled to WASM.
+/// #[global_allocator]
+/// static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
-// Define some persistent storage using the Solidity ABI.
-// `Counter` will be the entrypoint.
+use stylus_sdk::{msg, prelude::*};
+/// import modules
+mod erc721;
+use crate::erc721::{Erc721, Erc721Params};
+use alloy_primitives::{Address, U256};
+use erc721::{Erc721Error, NotAuthorized};
+/// Import the Stylus SDK along with alloy primitive types for use in our program.
+
+
+struct StylusNFTParams;
+
+/// Immutable definitions
+impl Erc721Params for StylusNFTParams {
+    const NAME: &'static str = "StylusNFT";
+    const SYMBOL: &'static str = "SNFT";
+}
+
+// Define the entrypoint as a Solidity storage object, in this case a struct
+// called `Counter` with a single uint256 value called `number`. The sol_storage! macro
+// will generate Rust-equivalent structs with all fields mapped to Solidity-equivalent
+// storage slots and types.
 sol_storage! {
     #[entrypoint]
-    pub struct Counter {
-        uint256 number;
+    struct StylusNFT {
+        #[borrow] // Allows erc721 to access MyToken's storage and make calls
+        Erc721<StylusNFTParams> erc721;
+        uint256 counter;
     }
 }
 
-/// Declare that `Counter` is a contract with the following external methods.
 #[public]
-impl Counter {
-    /// Gets the number from storage.
-    pub fn number(&self) -> U256 {
-        self.number.get()
+#[inherit(Erc721<StylusNFTParams>)]
+impl StylusNFT {
+    fn token_uri(token_id: U256) -> Result<String, Erc721Error> {
+        Ok(format!("{}{}", "https://foobar/", token_id))
     }
 
-    /// Sets a number in storage to a user-specified value.
-    pub fn set_number(&mut self, new_number: U256) {
-        self.number.set(new_number);
+    pub fn mint(&mut self, to: Address) -> Result<(), Erc721Error> {
+        let token_id = self.counter.get();
+        self.erc721._mint(to, token_id)?;
+
+        let new_value = token_id + U256::from(1);
+        self.counter.set(new_value);
+        Ok(())
     }
 
-    /// Sets a number in storage to a user-specified value.
-    pub fn mul_number(&mut self, new_number: U256) {
-        self.number.set(new_number * self.number.get());
+    pub fn safe_mint(&mut self, to: Address) -> Result<(), Erc721Error> {
+        let token_id = self.counter.get();
+        self.erc721._safe_mint(to, token_id)?;
+
+        let new_value = token_id + U256::from(1);
+        self.counter.set(new_value);
+        Ok(())
     }
 
-    /// Sets a number in storage to a user-specified value.
-    pub fn add_number(&mut self, new_number: U256) {
-        self.number.set(new_number + self.number.get());
-    }
+    pub fn burn(&mut self, token_id: U256) -> Result<(), Erc721Error> {
+        let owner = self.erc721._owners.get(token_id);
+        if msg::sender() != owner {
+            return Err(Erc721Error::NotAuthorized(NotAuthorized {
+                caller: msg::sender(),
+            }));
+        };
 
-    /// Increments `number` and updates its value in storage.
-    pub fn increment(&mut self) {
-        let number = self.number.get();
-        self.set_number(number + U256::from(1));
+        self.erc721._burn(token_id)?;
+        Ok(())
     }
 }
